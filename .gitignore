@@ -9,6 +9,7 @@ results/
 *.log
 225*/
 
-# External data (download separately)
+# External data (download separately; data/ is a local cache of PVGIS/Energinet series)
 dataset/
 mascor/
+data/

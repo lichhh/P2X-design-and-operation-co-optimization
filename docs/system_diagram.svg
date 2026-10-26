@@ -1,0 +1,135 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="600" viewBox="0 0 1040 600">
+  <style>
+    text { font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif; fill: #0f172a; }
+    .title { font-size: 14px; font-weight: 600; text-anchor: middle; }
+    .sub { font-size: 11.5px; fill: #334155; text-anchor: middle; }
+    .lab { font-size: 11.5px; text-anchor: middle; }
+    .blue { fill: #1d4ed8; }
+    .green { fill: #15803d; }
+    .orange { fill: #c2410c; }
+    .gray { fill: #64748b; }
+    .sp { font-size: 8.5px; baseline-shift: super; }
+    .sb { font-size: 8.5px; baseline-shift: sub; }
+    .box { fill: #f8fafc; stroke: #475569; stroke-width: 1.2; }
+    .pw { stroke: #1d4ed8; stroke-width: 2; fill: none; }
+    .h2 { stroke: #15803d; stroke-width: 2; fill: none; }
+    .cm { stroke: #c2410c; stroke-width: 2; fill: none; }
+    .cu { stroke: #64748b; stroke-width: 1.6; fill: none; stroke-dasharray: 5 4; }
+  </style>
+  <defs>
+    <marker id="aB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1d4ed8"/></marker>
+    <marker id="aG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#15803d"/></marker>
+    <marker id="aO" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c2410c"/></marker>
+    <marker id="aS" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#64748b"/></marker>
+  </defs>
+
+  <rect width="1040" height="600" fill="#ffffff"/>
+
+  <!-- Electricity bus -->
+  <rect x="250" y="50" width="12" height="470" rx="3" fill="#1d4ed8"/>
+  <text x="256" y="40" class="title blue">电力母线</text>
+
+  <!-- Wind farm -->
+  <rect x="20" y="70" width="150" height="70" rx="6" class="box"/>
+  <text x="95" y="98" class="title">风电场</text>
+  <text x="95" y="120" class="sub">C<tspan class="sp">W</tspan> · CF<tspan class="sp">W</tspan><tspan class="sb">t</tspan></text>
+  <line x1="170" y1="105" x2="247" y2="105" class="pw" marker-end="url(#aB)"/>
+  <text x="209" y="98" class="lab blue">CF<tspan class="sp">W</tspan> C<tspan class="sp">W</tspan></text>
+  <line x1="95" y1="140" x2="95" y2="178" class="cu" marker-end="url(#aS)"/>
+  <text x="95" y="196" class="lab gray">弃风弃光 P<tspan class="sp">curt</tspan></text>
+
+  <!-- PV plant -->
+  <rect x="20" y="225" width="150" height="70" rx="6" class="box"/>
+  <text x="95" y="253" class="title">光伏电站</text>
+  <text x="95" y="275" class="sub">C<tspan class="sp">PV</tspan> · CF<tspan class="sp">PV</tspan><tspan class="sb">t</tspan></text>
+  <line x1="170" y1="260" x2="247" y2="260" class="pw" marker-end="url(#aB)"/>
+  <text x="209" y="253" class="lab blue">CF<tspan class="sp">PV</tspan> C<tspan class="sp">PV</tspan></text>
+
+  <!-- Grid -->
+  <rect x="20" y="380" width="150" height="90" rx="6" class="box"/>
+  <text x="95" y="408" class="title">电网</text>
+  <text x="95" y="430" class="sub">λ<tspan class="sb">t</tspan> · ε<tspan class="sb">t</tspan></text>
+  <text x="95" y="450" class="sub">接入上限 G<tspan class="sp">max</tspan></text>
+  <line x1="170" y1="405" x2="247" y2="405" class="pw" marker-end="url(#aB)"/>
+  <text x="209" y="398" class="lab blue">P<tspan class="sp">imp</tspan></text>
+  <line x1="250" y1="445" x2="173" y2="445" class="pw" marker-end="url(#aB)"/>
+  <text x="209" y="462" class="lab blue">P<tspan class="sp">exp</tspan></text>
+
+  <!-- BESS -->
+  <rect x="400" y="55" width="200" height="70" rx="6" class="box"/>
+  <text x="500" y="84" class="title">电池 BESS</text>
+  <text x="500" y="106" class="sub">C<tspan class="sp">B</tspan> · SOC 0.1–0.9</text>
+  <line x1="262" y1="78" x2="397" y2="78" class="pw" marker-end="url(#aB)"/>
+  <text x="330" y="71" class="lab blue">P<tspan class="sp">ch</tspan></text>
+  <line x1="400" y1="105" x2="265" y2="105" class="pw" marker-end="url(#aB)"/>
+  <text x="330" y="121" class="lab blue">P<tspan class="sp">dis</tspan></text>
+
+  <!-- PEM electrolyser -->
+  <rect x="400" y="160" width="200" height="85" rx="6" class="box"/>
+  <text x="500" y="186" class="title">PEM 电解槽</text>
+  <text x="500" y="207" class="sub">运行 u / 热备 s / 停机</text>
+  <text x="500" y="227" class="sub">C<tspan class="sp">PEM</tspan> · 部分负荷曲线</text>
+  <line x1="262" y1="202" x2="397" y2="202" class="pw" marker-end="url(#aB)"/>
+  <text x="330" y="194" class="lab blue">P<tspan class="sp">PEM</tspan></text>
+  <text x="330" y="220" class="lab blue">+ f<tspan class="sp">sb</tspan> C<tspan class="sp">PEM</tspan> s</text>
+
+  <!-- Compressor and tank -->
+  <rect x="400" y="290" width="85" height="55" rx="6" class="box"/>
+  <text x="442" y="314" class="title">压缩机</text>
+  <text x="442" y="333" class="sub">e<tspan class="sp">comp</tspan></text>
+  <line x1="262" y1="318" x2="397" y2="318" class="pw" marker-end="url(#aB)"/>
+  <text x="330" y="311" class="lab blue">P<tspan class="sp">comp</tspan></text>
+  <rect x="515" y="290" width="85" height="55" rx="6" class="box"/>
+  <text x="557" y="314" class="title">储氢罐</text>
+  <text x="557" y="333" class="sub">C<tspan class="sp">H₂</tspan> · H<tspan class="sb">t</tspan></text>
+  <line x1="485" y1="318" x2="512" y2="318" class="h2" marker-end="url(#aG)"/>
+
+  <!-- Methanol synthesis -->
+  <rect x="400" y="400" width="200" height="110" rx="6" class="box"/>
+  <text x="500" y="428" class="title">甲醇合成</text>
+  <text x="500" y="450" class="sub">常开 · 负荷 20–100 % · 爬坡</text>
+  <text x="500" y="470" class="sub">名义产能 ṁ<tspan class="sp">nom</tspan> = κ D</text>
+  <line x1="262" y1="455" x2="397" y2="455" class="pw" marker-end="url(#aB)"/>
+  <text x="330" y="448" class="lab blue">e<tspan class="sp">M</tspan> ṁ<tspan class="sp">M</tspan></text>
+  <line x1="500" y1="510" x2="500" y2="548" class="cm" marker-end="url(#aO)"/>
+  <text x="500" y="568" class="lab orange">甲醇产品 ṁ<tspan class="sp">M</tspan></text>
+
+  <!-- H2 header -->
+  <rect x="690" y="170" width="12" height="300" rx="3" fill="#15803d"/>
+  <text x="696" y="160" class="title green">H₂ 节点</text>
+  <line x1="600" y1="202" x2="687" y2="202" class="h2" marker-end="url(#aG)"/>
+  <text x="644" y="195" class="lab green">ṁ<tspan class="sp">H₂</tspan></text>
+  <polyline points="690,272 442,272 442,287" class="h2" marker-end="url(#aG)"/>
+  <text x="566" y="265" class="lab green">h<tspan class="sp">in</tspan></text>
+  <line x1="600" y1="330" x2="687" y2="330" class="h2" marker-end="url(#aG)"/>
+  <text x="644" y="323" class="lab green">h<tspan class="sp">out</tspan></text>
+  <line x1="690" y1="440" x2="603" y2="440" class="h2" marker-end="url(#aG)"/>
+  <text x="646" y="433" class="lab green">γ<tspan class="sp">H</tspan> ṁ<tspan class="sp">M</tspan></text>
+  <line x1="702" y1="202" x2="797" y2="202" class="h2" marker-end="url(#aG)"/>
+  <text x="750" y="195" class="lab green">h<tspan class="sp">sell</tspan></text>
+
+  <!-- H2 market -->
+  <rect x="800" y="170" width="200" height="65" rx="6" class="box"/>
+  <text x="900" y="198" class="title">H₂ 外售（可选）</text>
+  <text x="900" y="220" class="sub">p<tspan class="sp">H</tspan> · 上限 h<tspan class="sp">sell,max</tspan></text>
+
+  <!-- CO2 supply -->
+  <rect x="800" y="468" width="200" height="54" rx="6" class="box"/>
+  <text x="900" y="490" class="title">CO₂ 外购</text>
+  <text x="900" y="510" class="sub">c<tspan class="sp">CO₂</tspan> · 不限量</text>
+  <line x1="800" y1="495" x2="603" y2="495" class="cm" marker-end="url(#aO)"/>
+  <text x="740" y="488" class="lab orange">γ<tspan class="sp">C</tspan> ṁ<tspan class="sp">M</tspan></text>
+
+  <!-- Horizon-level constraints -->
+  <rect x="760" y="280" width="260" height="120" rx="6" fill="#fffbeb" stroke="#b45309" stroke-width="1" stroke-dasharray="4 3"/>
+  <text x="890" y="304" class="title" style="fill:#92400e">时域累计约束</text>
+  <text x="890" y="332" class="sub">碳强度：Σ ε<tspan class="sb">t</tspan> P<tspan class="sp">imp</tspan> ≤ CI<tspan class="sp">max</tspan> Σ ṁ<tspan class="sp">M</tspan></text>
+  <text x="890" y="356" class="sub">产量：Σ ṁ<tspan class="sp">M</tspan> + q ≥ D T</text>
+  <text x="890" y="380" class="sub">期末：E<tspan class="sb">T</tspan> ≥ E<tspan class="sb">0</tspan>，H<tspan class="sb">T</tspan> ≥ H<tspan class="sb">0</tspan></text>
+
+  <!-- Legend -->
+  <line x1="24" y1="530" x2="60" y2="530" class="pw"/><text x="68" y="534" style="font-size:11.5px">电力</text>
+  <line x1="110" y1="530" x2="146" y2="530" class="h2"/><text x="154" y="534" style="font-size:11.5px">H₂</text>
+  <line x1="24" y1="556" x2="60" y2="556" class="cm"/><text x="68" y="560" style="font-size:11.5px">CO₂ / 甲醇</text>
+  <line x1="150" y1="556" x2="186" y2="556" class="cu"/><text x="194" y="560" style="font-size:11.5px">弃电</text>
+</svg>
