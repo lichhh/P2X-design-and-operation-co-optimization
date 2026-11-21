@@ -1,6 +1,6 @@
 # 电转甲醇（PtM）调度 MILP 模型说明
 
-> 对应代码：[`ptm_scheduling_gamspy.py`](../ptm_scheduling_gamspy.py) 中的 `build_model()`，以及算例脚本 [`run_ptm_examples.py`](../run_ptm_examples.py)。参数默认值以 `OperatingParams` 和 `PlantDesign` 为准。本文与代码不一致时以代码为准，并同步修改本文。
+> 对应代码：[`ptm_scheduling_gamspy.py`](../ptm_scheduling_gamspy.py) 中的 `build_model()` 和 `add_downstream_section()`，以及算例脚本 [`run_ptm_examples.py`](../run_ptm_examples.py)、[`run_fvc_examples.py`](../run_fvc_examples.py)、[`validate_fvc_part1.py`](../validate_fvc_part1.py)。参数默认值以 `OperatingParams` 和 `PlantDesign` 为准。本文与代码不一致时以代码为准，并同步修改本文。
 >
 > **怎么看公式**：公式用 LaTeX 书写。在 VS Code 里打开本文件后按 `Ctrl+Shift+V`（或点右上角的预览按钮）即可渲染成正常公式；GitHub 网页上也会直接渲染。要粘进 Word，可以在 Word 公式框里切换到 LaTeX 输入模式。
 
@@ -26,8 +26,11 @@
 | PEM 部分负荷曲线 | Chen & Yang (2021) 线性比能耗 | `pem_curve=PEM_CURVE_BOP_PEAK`：系统效率在约 20 % 负荷时最高的假设曲线 |
 | 电网碳税 | 不计 | `tax_CO2`（MasCOR 取 28.10 USD/t），仅用于复现 MasCOR |
 | 电池充放电互斥 | 不加 | `bess_exclusive=True` |
+| 精馏与下游 | 精馏能耗并入 $e^{\mathrm{M}}$，产量要求加在合成产量上 | `distillation="explicit"`：粗甲醇罐 + FVC 精馏 + 加压水储热罐（第 8.1 节） |
+| 合成动态 | 恒定单耗、固定爬坡 | `syn_curve`、`ramp_MeOH_R1`、`alpha_up_H2`/`alpha_dn_H2`（第 8.2 节），参数待 Aspen Dynamics 标定 |
+| 绿电匹配 | 不加 | `match_window_h` + `phi_import`/`phi_spill`（第 8.3 节） |
 
-**当前角色**：在研究框架里，本模型目前只承担"完美预见上界"这一角色。以后会在它的基础上扩展出另外三个：滚动时域基线、RL 专家演示、设计 MILP（见第 8 节）。
+**当前角色**：在研究框架里，本模型目前只承担"完美预见上界"这一角色。以后会在它的基础上扩展出另外三个：滚动时域基线、RL 专家演示、设计 MILP（见第 9 节）。
 
 ---
 
@@ -44,12 +47,12 @@
 | A7 | PEM 热备用：不产氢，耗电为额定功率的 $f^{\mathrm{sb}}$。热备用→运行无成本；停机→运行（冷启动）按装机功率计成本 | 不建堆衰减 |
 | A8 | 只有进罐的 H₂ 需要压缩，压缩比功耗为常数（压到 172 bar [4]），与罐压无关 | 直接送合成的 H₂ 不另计压缩功（沿用 MasCOR） |
 | A9 | **甲醇合成常开**，负荷在 $f^{\mathrm{M}}$ 到 100 % 之间连续调节，有爬坡限制；不建开停机 | 启停过程缺乏可靠数据，Mucci 等 [5] 出于同样原因采用了这种做法。开停机版本作为敏感性 |
-| A10 | 每 kg 甲醇的电耗、H₂ 耗、CO₂ 耗不随负荷变化 | 部分负荷下合成效率不变；精馏能耗并入 $e^{\mathrm{M}}$ |
+| A10 | 每 kg 甲醇的电耗、H₂ 耗、CO₂ 耗不随负荷变化 | 部分负荷下合成效率不变；精馏能耗并入 $e^{\mathrm{M}}$。`distillation="explicit"` 时精馏单独建模（第 8.1 节），$e^{\mathrm{M}}$ 仍取 0.657，视作合成回路电耗（假设，待 Aspen 拆分）；部分负荷图见第 8.2 节 |
 | A11 | **产量要求**按平均速率 $D$ 给出，名义产能 $\dot m^{\mathrm{nom}} = \kappa D$（$\kappa \ge 1$ 为超配系数）；软约束，缺额罚款 | 与 Chen & Yang [4] 一致：固定产量、超配装置以换取柔性。$\kappa = 1$ 时甲醇只能满负荷运行，即退化为 MasCOR 的刚性装置 |
 | A12 | CO₂ 供应不限量、价格固定，不设 CO₂ 储存 | — |
 | A13 | 电网排放只计购电（基于位置的核算），售电不抵扣；排放因子取 Energinet 逐时数据中的化石 CO₂（125 % 热电联产分摊法），不计 CH₄、N₂O | — |
 | A14 | 碳规则：时域内累计购电排放 ≤ $CI^{\max}$ × 甲醇产量 | 沿用 MasCOR 的"净负排放"规则，**不是法规值**；欧盟 RFNBO 的判定方法不同（见第 3.4 节） |
-| A15 | 初始状态给定；时域末储能不低于初值 | 滚动时域使用前需要修改（见第 8 节） |
+| A15 | 初始状态给定；时域末储能不低于初值 | 滚动时域使用前需要修改（见第 9 节） |
 | A16 | 电池不建衰减，默认不加充放电互斥变量 | 负电价或零电价时电池可能同时充放电 |
 | A17 | 不计氧气副产、余热回收、用水约束；目标函数不含投资（CAPEX） | 只算运行成本，LCOM 在设计层计算 |
 | A18 | 两个平局打破项：PEM 功率 0.01 USD/MWh，电网购电和售电各 0.01 USD/MWh | 只用于在零电价时消除多重最优解，对经济性的影响可以忽略（见第 5、6 节） |
@@ -426,7 +429,142 @@ $$
 
 ---
 
-## 8 已知局限与待办
+## 8 可选扩展：粗甲醇罐、FVC 精馏与储热，合成动态，绿电匹配
+
+这些扩展默认关闭；关闭时模型与第 4 节完全相同（已核对：576 h 算例的 LP 松弛目标值一致到小数点后三位）。
+
+### 8.1 粗甲醇罐、FVC 精馏与储热（`distillation="explicit"`，`add_downstream_section()`）
+
+**系统**：合成 → 粗甲醇罐 → 精馏塔 → 出货。精馏塔用闪蒸蒸汽循环（FVC）电气化，并配一个加压水储热罐（TES）。TES 同时接收 FVC 的多余压缩热和合成反应热，在 FVC 停机时向再沸器供热。可选配一台电锅炉给 TES 充热。精馏按甲醇/水二元体系处理，塔与 FVC 的数据按 Qi 等 (2025) [18] 的算例折算到每 kg 甲醇。
+
+**两种运行模式**（沿用 [18]）：
+- $\delta_t = 1$：FVC 开启，回收全部冷凝热，承担全部再沸器负荷，多余的热 $Q^{\mathrm{str}}_t$ 送入 TES；
+- $\delta_t = 0$：FVC 停机，再沸器从 TES 取热，塔顶改用冷却水冷凝，精馏用电为零。
+
+**粗甲醇罐与精馏负荷**（`eq_crude`, `eq_crude_max`, `eq_dist_lo`）。$I_t$ 为罐内甲醇量（kg），$\dot m^{\mathrm{D}}_t$ 为精馏处理量即出货量，$q^{\mathrm{D}}_t$ 为低于负荷带的出货缺额：
+
+$$
+I_t = I_{t-1} + \big(\dot m^{\mathrm{M}}_t - \dot m^{\mathrm{D}}_t\big)\Delta t, \qquad 0 \le I_t \le C^{\mathrm{I}} \tag{22}
+$$
+
+$$
+\dot m^{\mathrm{D}}_t + q^{\mathrm{D}}_t \ge (1-\beta) D, \qquad \dot m^{\mathrm{D}}_t \le (1+\beta) D \tag{23}
+$$
+
+$\beta = 0$ 时精馏恒定运行（默认）。可选的精馏爬坡限制 `ramp_dist` 默认关闭。式 (18)、(19) 中的 $\dot m^{\mathrm{M}}$ 换成 $\dot m^{\mathrm{D}}$，缺额 $q = 10^{-3}\sum_t q^{\mathrm{D}}_t \Delta t$；CO₂ 原料成本仍按合成产量计。
+
+**FVC 功率**（`eq_z_on`, `eq_z_m`, `eq_z_lo`, `eq_fvc_power`, `eq_fvc_min`, `eq_fvc_max`, `eq_fvc_cap`）。$z_t = \dot m^{\mathrm{D}}_t \delta_t$ 用三条线性约束精确表示（$\delta$ 为二进制）：
+
+$$
+z_t \le (1+\beta) D\, \delta_t, \qquad z_t \le \dot m^{\mathrm{D}}_t, \qquad z_t \ge \dot m^{\mathrm{D}}_t - (1+\beta) D\,(1-\delta_t) \tag{24}
+$$
+
+FVC 开启时冷凝热全部回收，能量平衡为 $Q^{\mathrm{reb}} + Q^{\mathrm{str}} = Q^{\mathrm{cond}} + W$，所以压缩机功率与储热量呈线性关系，边际 COP = 1：
+
+$$
+W_t = Q^{\mathrm{str}}_t + 10^{-3}\big(q^{\mathrm{reb}} - q^{\mathrm{cond}}\big) z_t, \qquad
+10^{-3} q^{\mathrm{str,min}} z_t \le Q^{\mathrm{str}}_t \le 10^{-3} q^{\mathrm{str,max}} z_t, \qquad W_t \le W^{\mathrm{cap}} \tag{25}
+$$
+
+[18] 的表 2 支持这一关系：一段和两段 (a) 构型在最小和最大工况下 $W - Q^{\mathrm{str}}$ 都约为 95 kW，正好等于 $Q^{\mathrm{reb}} - Q^{\mathrm{cond}}$（1167 − 1071 kW）。[18] 图 6 中从 4.7 降到 1.7 的是平均 COP。因此在选定构型上，[18] 的 ALAMO 曲面 $f_1$ 可以换成式 (25)，问题保持 MILP。
+
+**储热罐**（`eq_tes`, `eq_tes_max`, `eq_eb_cap`）。按热端、冷端温度固定的双罐处理，储热量与热水量成正比。[18] 的结果显示罐温几乎不变（情景 a 稳定在约 146 °C），即按质量而不是按温度储热，这一简化与之相符：
+
+$$
+E^{\mathrm{T}}_t = (1-\sigma^{\mathrm{T}}) E^{\mathrm{T}}_{t-1} + \Big[Q^{\mathrm{str}}_t + 10^{-3} q^{\mathrm{syn}} \dot m^{\mathrm{M}}_t + \eta^{\mathrm{eb}} P^{\mathrm{eb}}_t - 10^{-3} q^{\mathrm{reb}} \big(\dot m^{\mathrm{D}}_t - z_t\big) - Q^{\mathrm{dump}}_t\Big]\Delta t, \qquad 0 \le E^{\mathrm{T}}_t \le E^{\mathrm{cap}} \tag{26}
+$$
+
+$Q^{\mathrm{dump}}_t$ 为排掉的热（罐满时多余的合成热，或负电价时 FVC 多压缩产生的热）。电锅炉 $0 \le P^{\mathrm{eb}}_t \le C^{\mathrm{eb}}$。时域末 $I_T \ge I_0$、$E^{\mathrm{T}}_T \ge E^{\mathrm{T}}_0$（`eq_term_I`, `eq_term_T`）。
+
+**与主模型的连接**：电力母线式 (1) 右端加 $W_t + P^{\mathrm{eb}}_t$；目标函数加冷却水费
+
+$$
+c^{\mathrm{cw}} \sum_t \Big[10^{-3} q^{\mathrm{cond}} \big(\dot m^{\mathrm{D}}_t - z_t\big) + Q^{\mathrm{dump}}_t\Big] \Delta t \tag{27}
+$$
+
+**参数**（"核对"一列含义同第 3.4 节）：
+
+| 符号 | 代码 | 默认值 | 单位 | 来源 | 核对 |
+|---|---|---|---|---|---|
+| $q^{\mathrm{reb}}$ | `q_reb` | 0.6623 | kWh_th/kg 甲醇 | [18]：再沸器 1167 kW，塔顶甲醇 55 kmol/h（1762 kg/h）；进料甲醇/水 0.55/0.45，40 块理论板，回流比 0.4 | ✅（二元体系折算） |
+| $q^{\mathrm{cond}}$ | `q_cond` | 0.6078 | kWh_th/kg | [18]：冷凝器 1071 kW | ✅ |
+| $q^{\mathrm{str,min}}$ | `q_str_min` | 0.1078 | kWh_th/kg | [18] 表 2，两段 (a) 最小储热 189.1 kW | ✅ |
+| $q^{\mathrm{str,max}}$ | `q_str_max` | 0.7422 | kWh_th/kg | [18] 表 2，两段 (a) 最大储热 1307.8 kW | ✅ |
+| $q^{\mathrm{syn}}$ | `q_syn` | 0.30 | kWh_th/kg 合成甲醇 | 反应焓（CO₂ + 3H₂ → CH₃OH + H₂O，−49.5 kJ/mol）的上限为 0.43；扣除回路内部预热后的净输出待 Aspen 核算 | ❌ |
+| $\sigma^{\mathrm{T}}$ | `loss_TES` | 0.001 | 1/h | 假设（[18] 取无损失） | ❌ |
+| $\eta^{\mathrm{eb}}$ | `eta_eboiler` | 0.99 | – | 电锅炉典型值 | ⚠ |
+| $c^{\mathrm{cw}}$ | `c_cooling` | 1.2744 | USD/MWh_th | [18] 补充材料：0.354 USD/GJ | ✅ |
+| $\beta$ | `beta_dist` | 0 | – | 算例设定（精馏恒定运行） | — |
+| $C^{\mathrm{I}}$, $E^{\mathrm{cap}}$, $W^{\mathrm{cap}}$, $C^{\mathrm{eb}}$ | `C_crude_kg` 等 | 24 t, 8 MWh_th, 0.4 MW, 0 | — | 演示设计（$D$ = 1 t/h） | — |
+| $I_0$, $E^{\mathrm{T}}_0$ | `crude0`, `e0_TES` | 0.5, 0.5 | – | 算例设定 | — |
+
+按上述参数，FVC 以最低点连续运行时精馏电耗为 0.162 kWh/kg（COP 4.76），约占全厂电耗的 1.5 %；改用电锅炉约 0.67 kWh/kg。
+
+**校核**（[`validate_fvc_part1.py`](../validate_fvc_part1.py)）：用 `add_downstream_section()` 重算 [18] 的情景 b（甘肃分时电价：谷段 16 h、75 USD/MWh，峰段 8 h FVC 停机；不计合成热和储热损失），最小化压缩机峰值功率：
+
+| 量 | 本模型 | [18]（MINLP，ALAMO 曲面） |
+|---|---|---|
+| 所需压缩机容量 | 679.6 kW | 679 kW |
+| 与两段 MVR（295 kW，全天定价）相比的盈亏平衡电价 | 115.2 USD/MWh（只计电费） | 115.3 USD/MWh |
+
+### 8.2 合成动态（参数待 Aspen Dynamics 标定）
+
+三项均为可选，默认关闭：
+
+- **部分负荷图** `syn_curve = ((L, kg H₂/kg, kWh/kg), ...)`：第一个点须等于 $f^{\mathrm{M}}$。H₂ 总耗和回路电耗须随产量为凸函数，用割线下界表示（与第 5 节同理，凸则不需要 SOS2）：
+
+$$
+h^{\mathrm{S}}_t \ge a_k \dot m^{\mathrm{M}}_t + b_k v_t, \qquad P^{\mathrm{S}}_t \ge a'_k \dot m^{\mathrm{M}}_t + b'_k v_t \qquad \forall k \tag{28}
+$$
+
+  其中 $v_t$ 在常开情景下取 1。
+
+- **随负荷变化的爬坡限制** `ramp_MeOH_R1`：式 (17) 右端改为 $\big(R\,\dot m^{\mathrm{nom}} + R_1 \dot m^{\mathrm{M}}_{t-1}\big)\Delta t$。
+
+- **变负荷的 H₂ 损失** `alpha_up_H2`、`alpha_dn_H2`（kg H₂ / (kg/h 负荷变化)），计入 H₂ 节点式 (11)：
+
+$$
+\ell_t \Delta t \ge \alpha^{+}\big(\dot m^{\mathrm{M}}_t - \dot m^{\mathrm{M}}_{t-1}\big), \qquad \ell_t \Delta t \ge \alpha^{-}\big(\dot m^{\mathrm{M}}_{t-1} - \dot m^{\mathrm{M}}_t\big) \tag{29}
+$$
+
+是否还需要显式的低阶动态模型，取决于合成回路主导时间常数与步长之比 $\Pi = \tau/\Delta t$：$\Pi \ll 1$ 时以上三项足够；$\Pi \sim 1$（慢的热或压力模态，或改用 15 min 步长）时再加状态空间模型。
+
+### 8.3 绿电匹配时间窗（`match_window_h`, `phi_import`, `phi_spill`）
+
+把时域按 `match_window_h` 小时划分为窗口 $w$，在每个窗口内：
+
+$$
+\sum_{t \in w} P^{\mathrm{imp}}_t \le \phi^{\mathrm{imp}} \sum_{t \in w} P^{\mathrm{load}}_t, \qquad
+\sum_{t \in w} \big(P^{\mathrm{exp}}_t + P^{\mathrm{curt}}_t\big) \le \phi^{\mathrm{spill}} \sum_{t \in w} \big(CF^{\mathrm{W}}_t C^{\mathrm{W}} + CF^{\mathrm{PV}}_t C^{\mathrm{PV}}\big) \tag{30}
+$$
+
+$P^{\mathrm{load}}_t$ 为全厂用电（PEM、热备用、压缩、合成、FVC、电锅炉），不含电池充电。并网型绿电直连（发改能源〔2025〕650 号：自发自用电量不低于可用发电量的 60 %、不低于总用电量的 30 %）对应 `match_window_h=8760`、`phi_import=0.7`、`phi_spill=0.4`；离网对应 $G^{\max} = 0$。弃电是否计入"可用发电量"以省级细则为准。
+
+### 8.4 算例（[`run_fvc_examples.py`](../run_fvc_examples.py)，Skive 2023，演示设计，CPLEX 相对 gap 0.01 %）
+
+演示设计同第 6 节（$\kappa$ = 1.25，$D$ = 1 t/h），另加粗甲醇罐 24 t、TES 8 MWh_th、FVC 压缩机 0.4 MW。explicit 模式全年模型有 350,408 个方程、236,522 个变量，二进制变量每小时 3 个。
+
+| 算例 | 与 `fvc_tes` 的区别 | 目标值 (USD) | 相对 `fvc_tes` (USD) | FVC 开机 (h) | 精馏电耗 (kWh/kg) | 排热 (MWh_th) | 求解 (s) |
+|---|---|---|---|---|---|---|---|
+| `lumped` | 原模型（精馏并入 $e^{\mathrm{M}}$，全时域产量约束） | −5,084,419 | −301,736 | — | — | — | 19 |
+| `fvc_tes` | 基准 | −4,782,684 | 0 | 4,085 | 0.083 | 3 | 384 |
+| `no_syn_heat` | 不回收合成热 | −4,735,750 | +46,934 | 7,392 | 0.153 | 3 | 32 |
+| `eboiler_tes` | 无 FVC，1 MW 电锅炉充 TES | −4,624,225 | +158,458 | 0 | 0.370 | 0 | 31 |
+| `fvc_no_tes` | 无 TES | −4,701,690 | +80,994 | 8,760 | 0.162 | 3,572 | 36 |
+| `no_crude_tank` | 无粗甲醇罐 | −4,155,517 | +627,166 | 4,082 | 0.083 | 4 | 217 |
+| `match_annual` | 年度绿电匹配（0.7 / 0.4） | −4,562,957 | +219,727 | 4,069 | 0.085 | 6 | 964 |
+
+- **粗甲醇罐是合成柔性的前提**：去掉 24 t 的罐，合成被锁在 1 t/h，年运行成本增加 62.7 万 USD（约 72 USD/t 甲醇）。基准算例中罐容全年用满，再加大仍有边际价值。
+- **与 `lumped` 的差距**（30.2 万 USD/年）中精馏电费只占约 4.4 万，其余主要来自全时域产量约束隐含的免费跨季节库存（约 480 t）。
+- **合成热回收**使 FVC 开机时数从 7,392 h 降到 4,085 h，年省 4.7 万 USD。
+- **FVC 对比电锅炉**：年省 15.8 万 USD；[18] 中 400 kW 压缩机投资按不同成本模型为 0.2–1.0 M USD，年化（8 %、25 年）约 2–9 万 USD。本算例 $\chi \approx 0.45$。
+- **8 MWh TES** 年值约 8.1 万 USD；没有 TES 时合成热 2,628 MWh 全部排掉，FVC 全年开机。
+- **年度绿电匹配**起作用的是 60 % 自用要求（售电 + 弃电 = 发电量的 40 %，弃电降为 0），购电比例约束不起作用。
+- 以上差值都是不含投资的运行成本有限差分。逐小时核对：$z = \dot m^{\mathrm{D}}\delta$ 的偏差为 0，式 (25) 残差 $10^{-16}$ 量级，精馏全年恒为 1000 kg/h、无出货缺额。
+
+---
+
+## 9 已知局限与待办
 
 1. **假设参数**：甲醇开停机的参数（只用于敏感性情景）；甲醇合成电耗 $e^{\mathrm{M}}$ 和 $\gamma$ 只有一个来源。
 2. **PEM 曲线在低负荷时偏乐观**（第 5 节），需要换成基于极化曲线加辅机模型的物理曲线。
@@ -440,7 +578,12 @@ $$
 7. **电网费**：基准情景没有计入，可以参考丹麦输电网费做敏感性 [3]。
 8. **碳规则**：$CI^{\max}$ 是 MasCOR 自定的规则；需要的话按 RFNBO 授权条例 [17] 的方法另建约束。
 9. **PEM 曲线在负电价下可能不紧**（第 5 节），每次出结果都要逐小时检查。
-10. **未建模的物理**：甲醇部分负荷效率、电池和电解槽衰减、罐压对压缩功的影响、辅助服务市场。
+10. **未建模的物理**：甲醇部分负荷效率（可用 `syn_curve` 补上，第 8.2 节）、电池和电解槽衰减、罐压对压缩功的影响、辅助服务市场。
+11. **FVC 只有两种模式**（第 8.1 节，沿用 [18]）：开启时再沸器全部由 FVC 供热，合成热只能经 TES、在 FVC 停机时进入再沸器。没有 TES 时，合成热全部排掉（算例 `fvc_no_tes`）。部分负荷的 FVC（只压缩一部分塔顶蒸汽、其余用冷却水冷凝）没有建模。
+12. **FVC 开停没有切换成本和最短开停时间**，塔和储罐在 1 h 以内的动态也没有建模；这些留给 FVC Part 2 的 MPC 层。
+13. **TES 按双罐、热端温度固定处理**：没有核对热端温度和压力与合成热温位的匹配，也没有检查直接法储热（塔底水作介质）的情形。
+14. **$e^{\mathrm{M}}$ 的口径**：explicit 模式下仍取 0.657 kWh/kg，当作合成回路电耗，需用 Aspen 流程拆分；$q^{\mathrm{syn}}$ 同样待核算。
+15. **负电价下的电制热**：FVC 可以多压缩、再经 $Q^{\mathrm{dump}}$ 排热来消纳电量，电锅炉也可以。物理上可行，但出结果后应逐小时检查是否合理。
 
 ---
 
@@ -479,3 +622,5 @@ $$
 [16] European Commission JRC, PVGIS v5.3（逐时光伏出力）：https://re.jrc.ec.europa.eu/pvg_tools/en/
 
 [17] Commission Delegated Regulation (EU) 2023/1185（RFNBO 温室气体减排计算方法）：https://eur-lex.europa.eu/eli/reg_del/2023/1185/oj/eng
+
+[18] Qi, M., Zhang, X., Wong, D.S.-H., Shu, C.-M., Cui, C., Kiss, A.A. (2025). Electrified distillation with flash vapor circulation and thermal storage for dynamic electricity markets. AIChE J. 71, e18750。表 2、图 4、图 13–15，补充材料（冷却水价格）。

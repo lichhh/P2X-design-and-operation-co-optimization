@@ -19,7 +19,15 @@ The model is the operational layer of a design-under-uncertainty study. Installe
 | H₂ tank | Inventory balance with compression power; optional H₂ sales |
 | Methanol synthesis | Always on, modulating between 20 % and 100 % of nameplate with ramp limits (as in Mucci et al., 2023). Nameplate = κ × production requirement. An on/off unit-commitment variant is kept for sensitivity runs (`methanol_uc=True`) |
 | Carbon rule | Grid-import emissions per tonne of methanol ≤ `CI_max`, with an hourly grid emission factor |
-| Horizon end | End-of-horizon BESS and H₂ levels ≥ initial levels (optional) |
+| Horizon end | End-of-horizon storage levels ≥ initial levels (optional) |
+
+Optional extensions (off by default; with them off the model is unchanged):
+
+| Option | Representation |
+|---|---|
+| `distillation="explicit"` | Crude methanol tank between synthesis and a constant-load (or banded) distillation column. The column is electrified with flash vapor circulation (FVC) and has a pressurized-water thermal store that also takes the synthesis reaction heat; optional electric boiler. Two modes per hour as in Qi et al. (2025): FVC on (covers the reboiler, surplus to the store) or off (reboiler from the store). With the FVC on, all condenser heat is recovered, so compressor power is linear in the heat sent to storage (marginal COP = 1); one binary per hour |
+| Synthesis dynamics | Convex part-load map of H₂ use and loop power (`syn_curve`), load-dependent ramp limit (`ramp_MeOH_R1`) and H₂ losses in load changes (`alpha_up_H2`, `alpha_dn_H2`); placeholders until calibrated with Aspen Dynamics |
+| Green-power matching | Grid import ≤ `phi_import` × plant load and export + curtailment ≤ `phi_spill` × available generation within windows of `match_window_h` hours (e.g. China's grid-connected green-power direct supply rule, or monthly/hourly RFNBO-style matching) |
 
 ### Differences from the MasCOR operational model
 
@@ -93,10 +101,16 @@ Reference solve times (CPLEX, default threads, 0.5 % relative gap):
 | Skive scenario 0, κ = 1.25 | 576 h | 15,557 | 2.0 s | 0.3 s |
 | Skive 2023, wind + PV | 8760 h | 236,525 | 75 s | 11 s |
 
+### Crude tank, FVC distillation and thermal storage
+
+- `validate_fvc_part1.py` re-solves scenario b of Qi et al. (2025) (Gansu time-of-use prices, FVC off in the 8 peak hours) with the explicit downstream block. It gives a 679.6 kW compressor (paper: 679 kW) and an MVR break-even price of 115.2 USD/MWh (paper: 115.3).
+- `run_fvc_examples.py [hours]` solves the 2023 Skive year with seven cases: the lumped reference; crude tank + FVC + thermal store; without synthesis-heat recovery; electric boiler instead of FVC; FVC without thermal store; without crude tank; and annual green-power matching. The differences between cases give a first estimate of what each unit is worth.
+
 ## Status and limitations
 
 - **Single-source parameters.** The methanol synthesis electricity use and H₂/CO₂ consumption come from one source (via MasCOR). The on/off variant's start-up parameters are placeholders.
 - **PEM curve.** The default curve, linear in load (Chen & Yang, 2021), is optimistic at low load. `PEM_CURVE_BOP_PEAK` is provided as a sensitivity case.
+- **Downstream placeholders.** In explicit mode, the recoverable synthesis heat (`q_syn` = 0.30 kWh/kg) and the thermal-store loss are assumptions, and `SP_MeOH` is still MasCOR's 0.657 kWh/kg, taken as loop electricity. The FVC has only the two modes of Qi et al. (2025), with no switching cost; sub-hourly column dynamics are left to an MPC layer.
 - **Synthetic scenarios.** The MasCOR scenarios have no PV and no timestamps, so they use a constant emission factor (DK1 2023 mean).
 - **Carbon rule.** `CI_max` reproduces MasCOR's net-negative rule. It is not a regulatory threshold, and with Danish grid intensities it does not bind in the examples.
 - **Single-horizon model.** The cumulative constraints apply within one horizon only, so the model is not yet set up for rolling-horizon use.

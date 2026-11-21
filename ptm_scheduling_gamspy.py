@@ -6,6 +6,8 @@ H2 tank.
 Process boundary:
     wind + PV + grid -> PEM electrolyzer -> (H2 tank) -> methanol synthesis
     BESS on the electricity bus; optional H2 sales to an external market
+    distillation="explicit": synthesis -> crude methanol tank -> FVC column,
+    with a pressurized-water thermal store fed by the synthesis heat
 
 Changes relative to the MasCOR operational model (Kim et al., arXiv:2603.03484,
 mascor/solvers/GLOBAL_solver.py):
@@ -27,12 +29,25 @@ mascor/solvers/GLOBAL_solver.py):
        replaces unlimited H2 sales as the reason to run the plant.
     6. Terminal storage conditions remove end-of-horizon depletion.
 
+Optional extensions (all off by default):
+    7. distillation="explicit": crude methanol tank, distillation column with
+       flash vapor circulation (FVC) and a pressurized-water thermal store
+       (TES) that also receives the synthesis reaction heat; optional electric
+       boiler. Column and FVC data are scaled from Qi et al. (2025, AIChE J
+       71:e18750). The FVC recovers all condenser heat when on, so its power
+       is linear in the heat sent to storage (marginal COP = 1).
+    8. Synthesis part-load map (syn_curve), load-dependent ramp limits and
+       H2 losses in load changes; placeholders until calibrated with Aspen
+       Dynamics.
+    9. Green-power matching windows: grid import as a share of plant load,
+       and export plus curtailment as a share of available generation.
+
 Parameter sources are documented in docs/MILP_model.md.
 
 Units used in this model:
     time: h
-    power: MW, electrical energy: MWh
-    H2 and methanol flows: kg/h, H2 inventory: kg
+    power: MW, electrical energy: MWh, heat: MW_th and MWh_th
+    H2 and methanol flows: kg/h, H2 and crude methanol inventories: kg
     electricity price: USD/MWh, grid emission factor: tCO2/MWh
     methanol, CO2 and emissions in cost/balance totals: t
 """
@@ -85,6 +100,11 @@ class PlantDesign:
     m_MeOH_nom_kgph: float = 1000.0  # synthesis nameplate capacity
     D_MeOH_kgph: Optional[float] = None  # average production requirement; None -> nameplate
     G_max_MW: float = 50.0
+    # Explicit downstream section (distillation="explicit" only)
+    C_crude_kg: float = 24000.0  # crude methanol tank, as methanol content [kg]
+    E_TES_MWh: float = 8.0  # pressurized-water thermal store [MWh_th]
+    W_FVC_MW: float = 0.40  # FVC compressor capacity [MW]; 0 -> no FVC
+    C_eboiler_MW: float = 0.0  # electric boiler charging the thermal store [MW]
 
     @property
     def demand_kgph(self) -> float:
@@ -118,7 +138,7 @@ class OperatingParams:
     # Methanol synthesis
     f_min_MeOH: float = 0.20  # minimum load fraction of nameplate
     ramp_MeOH: float = 0.50  # fraction of nameplate per h
-    SP_MeOH: float = 0.65702  # kWh/kg MeOH (MasCOR)
+    SP_MeOH: float = 0.65702  # kWh/kg MeOH (MasCOR); loop electricity only in explicit mode. ASSUMPTION
     gamma_H2: float = 0.19576  # kg H2/kg MeOH (MasCOR)
     gamma_CO2: float = 1.435802  # kg CO2/kg MeOH (MasCOR)
     # On/off variant for sensitivity runs only; its parameters are ASSUMPTION.
@@ -126,6 +146,13 @@ class OperatingParams:
     UT_MeOH: int = 8  # minimum up time [h]. ASSUMPTION
     DT_MeOH: int = 4  # minimum down time [h]. ASSUMPTION
     c_start_MeOH: float = 5000.0  # USD per start. ASSUMPTION
+    # Synthesis dynamics at the hourly scale, to be calibrated with Aspen Dynamics.
+    # Part-load map ((load fraction, kg H2/kg MeOH, kWh/kg MeOH), ...); None ->
+    # constant gamma_H2 and SP_MeOH. Total H2 use and loop power must be convex in load.
+    syn_curve: Optional[tuple] = None
+    ramp_MeOH_R1: float = 0.0  # load-dependent ramp term [1/h]: limit = (ramp_MeOH*m_nom + R1*m_prev)*dt
+    alpha_up_H2: float = 0.0  # kg H2 lost per kg/h of upward load change. ASSUMPTION
+    alpha_dn_H2: float = 0.0  # kg H2 lost per kg/h of downward load change. ASSUMPTION
 
     # H2 compression and storage
     SP_comp: float = 3.03  # kWh/kg H2 compressed into the tank (Chen & Yang, 2021)
@@ -139,6 +166,30 @@ class OperatingParams:
     soc_max: float = 0.90
     c_rate: float = 0.30  # power / energy [1/h]
     bess_exclusive: bool = False  # add charge/discharge binary
+
+    # Downstream section: "lumped" keeps distillation inside SP_MeOH and the
+    # requirement on synthesis output; "explicit" adds the crude tank, the FVC
+    # column and the thermal store.
+    distillation: str = "lumped"
+    beta_dist: float = 0.0  # column throughput band around D [-]; 0 -> constant column load
+    ramp_dist: Optional[float] = None  # column throughput ramp [fraction of D per h]; None -> band only
+    # Column and FVC per kg MeOH distilled, scaled from Qi et al. (2025): reboiler
+    # 1167 kW, condenser 1071 kW, 55 kmol/h (1762 kg/h) methanol in the distillate.
+    q_reb: float = 0.6623  # kWh_th/kg
+    q_cond: float = 0.6078  # kWh_th/kg
+    q_str_min: float = 0.1078  # kWh_th/kg FVC heat to storage at its minimum point (190 kW)
+    q_str_max: float = 0.7422  # kWh_th/kg FVC heat to storage at its two-stage (a) maximum (1308 kW)
+    # Synthesis heat recovered into the thermal store; the full reaction enthalpy
+    # (CO2 + 3 H2 -> CH3OH + H2O, -49.5 kJ/mol) is 0.43 kWh_th/kg.
+    q_syn: float = 0.30  # kWh_th/kg MeOH synthesized. ASSUMPTION
+    loss_TES: float = 0.001  # thermal store loss per h. ASSUMPTION (Qi et al. assumed none)
+    eta_eboiler: float = 0.99
+    c_cooling: float = 1.2744  # USD/MWh_th cooling water (0.354 USD/GJ, Qi et al. 2025)
+
+    # Green-power matching windows (None disables)
+    match_window_h: Optional[int] = None  # window length [h], e.g. 8760, 720, 1
+    phi_import: Optional[float] = None  # grid import <= phi_import * plant load in each window
+    phi_spill: Optional[float] = None  # export + curtailment <= phi_spill * available generation
 
     # Economics
     grid_fee: float = 0.0  # USD/MWh added to the import price
@@ -161,7 +212,9 @@ class OperatingParams:
     s0_PEM: int = 0
     u0_MeOH: int = 1  # on/off variant only
     m0_MeOH_frac: Optional[float] = None  # initial load of nameplate; None -> requirement
-    terminal_storage: bool = True  # end SOC and H2 level >= initial
+    crude0: float = 0.50  # crude tank level at t=0 [-]
+    e0_TES: float = 0.50  # thermal store level at t=0 [-]
+    terminal_storage: bool = True  # end levels of all stores >= initial
 
 
 @dataclass
@@ -206,6 +259,126 @@ def pem_curve_segments(curve) -> tuple[np.ndarray, np.ndarray]:
     return slopes, intercepts
 
 
+def syn_curve_segments(curve, m_nom: float) -> tuple[tuple, tuple]:
+    """Secant lines of total synthesis H2 use [kg/h] and loop power [MW] versus output [kg/h].
+
+    Both totals must be convex in output, so the maximum over the secant lines
+    equals the piecewise-linear interpolant and
+        h2_syn >= a_k * m_M + b_k * u_M   for all k
+    is exact without SOS2 binaries.
+    """
+
+    L = np.array([p[0] for p in curve], dtype=float)
+    out = L * m_nom
+    segs = []
+    for name, total in (("H2 use", out * np.array([p[1] for p in curve])),
+                        ("loop power", out * np.array([p[2] for p in curve]) / 1000.0)):
+        slopes = np.diff(total) / np.diff(out)
+        if np.any(np.diff(slopes) < -1e-12):
+            raise ValueError(f"Synthesis {name} is not convex in load; use SOS2 instead.")
+        segs.append((slopes, total[:-1] - slopes * out[:-1]))
+    return segs[0], segs[1]
+
+
+def add_downstream_section(m, t, first, last, design: PlantDesign, par: OperatingParams, m_syn, dt: float):
+    """Crude methanol tank, FVC distillation column and thermal store.
+
+    The column runs in the two modes of Qi et al. (2025): with the FVC on
+    (d_F = 1) the compressor recovers all condenser heat, covers the reboiler
+    and sends surplus heat Q_str to the store; with the FVC off the reboiler
+    draws on the store and the condenser uses cooling water. The store also
+    receives the synthesis heat and, optionally, an electric boiler.
+
+    Returns (variables, electric load [MW] expression over t, operating cost [USD]).
+    """
+
+    D = design.demand_kgph
+    m_hi = (1.0 + par.beta_dist) * D
+
+    C_crude = gp.Parameter(m, "C_crude", records=design.C_crude_kg, description="Crude tank [kg MeOH]")
+    E_cap = gp.Parameter(m, "E_cap", records=design.E_TES_MWh, description="Thermal store [MWh_th]")
+    W_cap = gp.Parameter(m, "W_cap", records=design.W_FVC_MW, description="FVC compressor [MW]")
+    C_eb = gp.Parameter(m, "C_eb", records=design.C_eboiler_MW, description="Electric boiler [MW]")
+    crude0 = gp.Parameter(m, "crude0", records=par.crude0)
+    e0 = gp.Parameter(m, "e0_TES", records=par.e0_TES)
+
+    m_D = gp.Variable(m, "m_D", domain=t, type="Positive", description="Column throughput, MeOH delivered [kg/h]")
+    m_D.up[t] = m_hi
+    q_D = gp.Variable(m, "q_D", domain=t, type="Positive", description="Offtake shortfall below the band [kg/h]")
+    I_c = gp.Variable(m, "I_c", domain=t, type="Positive", description="Crude tank, MeOH content [kg]")
+    d_F = gp.Variable(m, "d_F", domain=t, type="Binary", description="FVC on")
+    z_F = gp.Variable(m, "z_F", domain=t, type="Positive", description="MeOH distilled with the FVC on [kg/h]")
+    Q_str = gp.Variable(m, "Q_str", domain=t, type="Positive", description="FVC heat to the store [MW_th]")
+    W_F = gp.Variable(m, "W_F", domain=t, type="Positive", description="FVC compressor power [MW]")
+    P_eb = gp.Variable(m, "P_eb", domain=t, type="Positive", description="Electric boiler [MW]")
+    Q_dump = gp.Variable(m, "Q_dump", domain=t, type="Positive", description="Heat rejected from the store [MW_th]")
+    E_T = gp.Variable(m, "E_T", domain=t, type="Positive", description="Thermal store [MWh_th]")
+
+    # Crude methanol tank between synthesis and column.
+    eq_crude = gp.Equation(m, "eq_crude", domain=t)
+    eq_crude[t] = I_c[t] == I_c[t.lag(1)] + crude0 * C_crude * first[t] + (m_syn[t] - m_D[t]) * dt
+    eq_crude_max = gp.Equation(m, "eq_crude_max", domain=t)
+    eq_crude_max[t] = I_c[t] <= C_crude
+
+    # Column throughput band around the offtake rate (soft lower bound).
+    eq_dist_lo = gp.Equation(m, "eq_dist_lo", domain=t)
+    eq_dist_lo[t] = m_D[t] + q_D[t] >= (1.0 - par.beta_dist) * D
+    if par.ramp_dist is not None:
+        m_D_prev = m_D[t.lag(1)] + D * first[t]
+        eq_dist_up = gp.Equation(m, "eq_dist_up", domain=t)
+        eq_dist_up[t] = m_D[t] - m_D_prev <= par.ramp_dist * D * dt
+        eq_dist_dn = gp.Equation(m, "eq_dist_dn", domain=t)
+        eq_dist_dn[t] = m_D_prev - m_D[t] <= par.ramp_dist * D * dt
+
+    # z_F = m_D * d_F, exact for binary d_F.
+    eq_z_on = gp.Equation(m, "eq_z_on", domain=t)
+    eq_z_on[t] = z_F[t] <= m_hi * d_F[t]
+    eq_z_m = gp.Equation(m, "eq_z_m", domain=t)
+    eq_z_m[t] = z_F[t] <= m_D[t]
+    eq_z_lo = gp.Equation(m, "eq_z_lo", domain=t)
+    eq_z_lo[t] = z_F[t] >= m_D[t] - m_hi * (1 - d_F[t])
+
+    # FVC: energy balance Q_reb + Q_str = Q_cond + W when on, i.e. marginal COP = 1.
+    eq_fvc_power = gp.Equation(m, "eq_fvc_power", domain=t)
+    eq_fvc_power[t] = W_F[t] == Q_str[t] + (par.q_reb - par.q_cond) / 1000.0 * z_F[t]
+    eq_fvc_min = gp.Equation(m, "eq_fvc_min", domain=t)
+    eq_fvc_min[t] = Q_str[t] >= par.q_str_min / 1000.0 * z_F[t]
+    eq_fvc_max = gp.Equation(m, "eq_fvc_max", domain=t)
+    eq_fvc_max[t] = Q_str[t] <= par.q_str_max / 1000.0 * z_F[t]
+    eq_fvc_cap = gp.Equation(m, "eq_fvc_cap", domain=t)
+    eq_fvc_cap[t] = W_F[t] <= W_cap
+    eq_eb_cap = gp.Equation(m, "eq_eb_cap", domain=t)
+    eq_eb_cap[t] = P_eb[t] <= C_eb
+
+    # Thermal store with fixed hot and cold temperatures (two-tank, linear in stored mass).
+    # The reboiler draws on it whenever the FVC is off.
+    eq_tes = gp.Equation(m, "eq_tes", domain=t)
+    eq_tes[t] = E_T[t] == (1.0 - par.loss_TES) * (E_T[t.lag(1)] + e0 * E_cap * first[t]) + (
+        Q_str[t]
+        + par.q_syn / 1000.0 * m_syn[t]
+        + par.eta_eboiler * P_eb[t]
+        - par.q_reb / 1000.0 * (m_D[t] - z_F[t])
+        - Q_dump[t]
+    ) * dt
+    eq_tes_max = gp.Equation(m, "eq_tes_max", domain=t)
+    eq_tes_max[t] = E_T[t] <= E_cap
+
+    if par.terminal_storage:
+        eq_term_I = gp.Equation(m, "eq_term_I")
+        eq_term_I[...] = gp.Sum(t, last[t] * I_c[t]) >= crude0 * C_crude
+        eq_term_T = gp.Equation(m, "eq_term_T")
+        eq_term_T[...] = gp.Sum(t, last[t] * E_T[t]) >= e0 * E_cap
+
+    # Cooling water for the condenser with the FVC off and for rejected heat.
+    cost = gp.Sum(t, par.c_cooling * (par.q_cond / 1000.0 * (m_D[t] - z_F[t]) + Q_dump[t]) * dt)
+    load = W_F[t] + P_eb[t]
+    variables = {
+        "m_D": m_D, "q_D": q_D, "I_c": I_c, "d_F": d_F, "z_F": z_F,
+        "Q_str": Q_str, "W_F": W_F, "P_eb": P_eb, "Q_dump": Q_dump, "E_T": E_T,
+    }
+    return variables, load, cost
+
+
 def build_model(
     data: SchedulingData,
     design: PlantDesign,
@@ -222,6 +395,11 @@ def build_model(
         par = OperatingParams()
     if abs(par.pem_curve[0][0] - par.f_min_PEM) > 1e-9:
         raise ValueError("First PEM curve point must equal f_min_PEM.")
+    if par.distillation not in ("lumped", "explicit"):
+        raise ValueError('distillation must be "lumped" or "explicit".')
+    if par.syn_curve is not None and abs(par.syn_curve[0][0] - par.f_min_MeOH) > 1e-9:
+        raise ValueError("First synthesis curve point must equal f_min_MeOH.")
+    explicit = par.distillation == "explicit"
 
     n_t = len(data.time_steps)
     dt = par.dt_h
@@ -296,23 +474,6 @@ def build_model(
     # ---------------------------------------------------------------------
     # Equations
     # ---------------------------------------------------------------------
-    # Electricity bus and grid connection.
-    eq_power = gp.Equation(m, "eq_power", domain=t)
-    eq_power[t] = cf[t] * C_wind + cf_pv[t] * C_pv - P_curt[t] + P_imp[t] + P_dis[t] == (
-        P_exp[t]
-        + P_ch[t]
-        + P_PEM[t]
-        + par.f_sb_PEM * C_PEM * s_P[t]
-        + P_comp[t]
-        + par.SP_MeOH / 1000.0 * m_M[t]
-    )
-    eq_curt = gp.Equation(m, "eq_curt", domain=t)
-    eq_curt[t] = P_curt[t] <= cf[t] * C_wind + cf_pv[t] * C_pv
-    eq_imp_max = gp.Equation(m, "eq_imp_max", domain=t)
-    eq_imp_max[t] = P_imp[t] <= G_max
-    eq_exp_max = gp.Equation(m, "eq_exp_max", domain=t)
-    eq_exp_max[t] = P_exp[t] <= G_max
-
     # BESS.
     eq_soc = gp.Equation(m, "eq_soc", domain=t)
     eq_soc[t] = E[t] == (1.0 - par.loss_BESS) * (E[t.lag(1)] + soc0 * C_BESS * first[t]) + (
@@ -346,20 +507,6 @@ def build_model(
     eq_pem_curve = gp.Equation(m, "eq_pem_curve", domain=[k, t])
     eq_pem_curve[k, t] = m_H2[t] <= slope[k] * P_PEM[t] + icpt[k] * C_PEM * u_P[t]
 
-    # H2 node, tank and compression.
-    eq_h2_node = gp.Equation(m, "eq_h2_node", domain=t)
-    eq_h2_node[t] = m_H2[t] + h_out[t] == par.gamma_H2 * m_M[t] + h_in[t] + h_sell[t]
-    eq_tank = gp.Equation(m, "eq_tank", domain=t)
-    eq_tank[t] = H[t] == H[t.lag(1)] + h0 * C_H2 * first[t] + (h_in[t] - h_out[t]) * dt
-    eq_tank_min = gp.Equation(m, "eq_tank_min", domain=t)
-    eq_tank_min[t] = H[t] >= par.f_min_H2 * C_H2
-    eq_tank_max = gp.Equation(m, "eq_tank_max", domain=t)
-    eq_tank_max[t] = H[t] <= C_H2
-    eq_comp = gp.Equation(m, "eq_comp", domain=t)
-    eq_comp[t] = P_comp[t] == par.SP_comp / 1000.0 * h_in[t]
-    eq_sell_max = gp.Equation(m, "eq_sell_max", domain=t)
-    eq_sell_max[t] = h_sell[t] <= par.H2_sale_max_kgph
-
     # Methanol synthesis.
     extra_vars = {}
     eq_m_min = gp.Equation(m, "eq_m_min", domain=t)
@@ -367,6 +514,10 @@ def build_model(
     eq_m_ramp_up = gp.Equation(m, "eq_m_ramp_up", domain=t)
     eq_m_ramp_dn = gp.Equation(m, "eq_m_ramp_dn", domain=t)
     m_prev = m_M[t.lag(1)] + m0_M * first[t]
+    ramp_lim = par.ramp_MeOH * m_nom * dt
+    if par.ramp_MeOH_R1:
+        # Load-dependent ramp limit, e.g. slower changes at low load.
+        ramp_lim = ramp_lim + par.ramp_MeOH_R1 * m_prev * dt
     if par.methanol_uc:
         # On/off variant: start/stop logic, min load when on, min up/down time.
         u0_M = gp.Parameter(m, "u0_M", records=par.u0_MeOH)
@@ -380,30 +531,117 @@ def build_model(
         eq_m_logic[t] = u_M[t] - (u_M[t.lag(1)] + u0_M * first[t]) == y_M[t] - z_M[t]
         eq_m_yz = gp.Equation(m, "eq_m_yz", domain=t)
         eq_m_yz[t] = y_M[t] + z_M[t] <= 1
-        eq_m_ramp_up[t] = m_M[t] - m_prev <= par.ramp_MeOH * m_nom * dt + par.f_min_MeOH * m_nom * y_M[t]
-        eq_m_ramp_dn[t] = m_prev - m_M[t] <= par.ramp_MeOH * m_nom * dt + par.f_min_MeOH * m_nom * z_M[t]
+        eq_m_ramp_up[t] = m_M[t] - m_prev <= ramp_lim + par.f_min_MeOH * m_nom * y_M[t]
+        eq_m_ramp_dn[t] = m_prev - m_M[t] <= ramp_lim + par.f_min_MeOH * m_nom * z_M[t]
         # Minimum up/down time; the status history before t=0 is assumed feasible.
         eq_m_minup = gp.Equation(m, "eq_m_minup", domain=t)
         eq_m_minup[t] = functools.reduce(operator.add, [y_M[t]] + [y_M[t.lag(j)] for j in range(1, par.UT_MeOH)]) <= u_M[t]
         eq_m_mindn = gp.Equation(m, "eq_m_mindn", domain=t)
         eq_m_mindn[t] = functools.reduce(operator.add, [z_M[t]] + [z_M[t.lag(j)] for j in range(1, par.DT_MeOH)]) <= 1 - u_M[t]
         cost_start_M = par.c_start_MeOH * gp.Sum(t, y_M[t])
+        on_M = u_M[t]
     else:
         # Base case: always on, modulating between minimum load and nameplate.
         eq_m_min[t] = m_M[t] >= par.f_min_MeOH * m_nom
         eq_m_max[t] = m_M[t] <= m_nom
-        eq_m_ramp_up[t] = m_M[t] - m_prev <= par.ramp_MeOH * m_nom * dt
-        eq_m_ramp_dn[t] = m_prev - m_M[t] <= par.ramp_MeOH * m_nom * dt
+        eq_m_ramp_up[t] = m_M[t] - m_prev <= ramp_lim
+        eq_m_ramp_dn[t] = m_prev - m_M[t] <= ramp_lim
         cost_start_M = 0
+        on_M = 1
 
-    # Production requirement over the horizon (soft).
+    # Synthesis H2 use and loop power: constant per kg, or the part-load map.
+    if par.syn_curve is None:
+        h2_syn = par.gamma_H2 * m_M[t]
+        P_syn = par.SP_MeOH / 1000.0 * m_M[t]
+    else:
+        (a_h, b_h), (a_p, b_p) = syn_curve_segments(par.syn_curve, design.m_MeOH_nom_kgph)
+        ks = gp.Set(m, "ks", records=[f"s{i}" for i in range(len(a_h))], description="Synthesis curve segments")
+        a_H = gp.Parameter(m, "a_H", domain=ks, records=a_h)
+        b_H = gp.Parameter(m, "b_H", domain=ks, records=b_h)
+        a_P = gp.Parameter(m, "a_P", domain=ks, records=a_p)
+        b_P = gp.Parameter(m, "b_P", domain=ks, records=b_p)
+        h_S = gp.Variable(m, "h_S", domain=t, type="Positive", description="Synthesis H2 use [kg/h]")
+        P_S = gp.Variable(m, "P_S", domain=t, type="Positive", description="Synthesis loop power [MW]")
+        eq_syn_h2 = gp.Equation(m, "eq_syn_h2", domain=[ks, t])
+        eq_syn_h2[ks, t] = h_S[t] >= a_H[ks] * m_M[t] + b_H[ks] * on_M
+        eq_syn_pow = gp.Equation(m, "eq_syn_pow", domain=[ks, t])
+        eq_syn_pow[ks, t] = P_S[t] >= a_P[ks] * m_M[t] + b_P[ks] * on_M
+        extra_vars.update({"h_S": h_S, "P_S": P_S})
+        h2_syn = h_S[t]
+        P_syn = P_S[t]
+    if par.alpha_up_H2 or par.alpha_dn_H2:
+        # H2 lost in load changes (purge, off-spec crude), convex in the change.
+        l_H2 = gp.Variable(m, "l_H2", domain=t, type="Positive", description="H2 lost in load changes [kg/h]")
+        eq_loss_up = gp.Equation(m, "eq_loss_up", domain=t)
+        eq_loss_up[t] = l_H2[t] * dt >= par.alpha_up_H2 * (m_M[t] - m_prev)
+        eq_loss_dn = gp.Equation(m, "eq_loss_dn", domain=t)
+        eq_loss_dn[t] = l_H2[t] * dt >= par.alpha_dn_H2 * (m_prev - m_M[t])
+        extra_vars["l_H2"] = l_H2
+        h2_syn = h2_syn + l_H2[t]
+
+    # Downstream: methanol delivered, extra electric load and cost.
+    if explicit:
+        down_vars, down_load, cost_down = add_downstream_section(m, t, first, last, design, par, m_M, dt)
+        extra_vars.update(down_vars)
+        m_out = down_vars["m_D"]
+    else:
+        down_load, cost_down = 0, 0
+        m_out = m_M
+
+    # Electricity bus and grid connection.
+    load = P_PEM[t] + par.f_sb_PEM * C_PEM * s_P[t] + P_comp[t] + P_syn + down_load
+    eq_power = gp.Equation(m, "eq_power", domain=t)
+    eq_power[t] = cf[t] * C_wind + cf_pv[t] * C_pv - P_curt[t] + P_imp[t] + P_dis[t] == P_exp[t] + P_ch[t] + load
+    eq_curt = gp.Equation(m, "eq_curt", domain=t)
+    eq_curt[t] = P_curt[t] <= cf[t] * C_wind + cf_pv[t] * C_pv
+    eq_imp_max = gp.Equation(m, "eq_imp_max", domain=t)
+    eq_imp_max[t] = P_imp[t] <= G_max
+    eq_exp_max = gp.Equation(m, "eq_exp_max", domain=t)
+    eq_exp_max[t] = P_exp[t] <= G_max
+
+    # H2 node, tank and compression.
+    eq_h2_node = gp.Equation(m, "eq_h2_node", domain=t)
+    eq_h2_node[t] = m_H2[t] + h_out[t] == h2_syn + h_in[t] + h_sell[t]
+    eq_tank = gp.Equation(m, "eq_tank", domain=t)
+    eq_tank[t] = H[t] == H[t.lag(1)] + h0 * C_H2 * first[t] + (h_in[t] - h_out[t]) * dt
+    eq_tank_min = gp.Equation(m, "eq_tank_min", domain=t)
+    eq_tank_min[t] = H[t] >= par.f_min_H2 * C_H2
+    eq_tank_max = gp.Equation(m, "eq_tank_max", domain=t)
+    eq_tank_max[t] = H[t] <= C_H2
+    eq_comp = gp.Equation(m, "eq_comp", domain=t)
+    eq_comp[t] = P_comp[t] == par.SP_comp / 1000.0 * h_in[t]
+    eq_sell_max = gp.Equation(m, "eq_sell_max", domain=t)
+    eq_sell_max[t] = h_sell[t] <= par.H2_sale_max_kgph
+
+    # Production requirement over the horizon (soft). In explicit mode the
+    # shortfall is the hourly offtake shortfall below the column band.
+    if explicit:
+        eq_short = gp.Equation(m, "eq_short")
+        eq_short[...] = short == gp.Sum(t, down_vars["q_D"][t] * dt) / 1000.0
     eq_target = gp.Equation(m, "eq_target")
-    eq_target[...] = gp.Sum(t, m_M[t] * dt) / 1000.0 + short >= D_req * n_t * dt / 1000.0
+    eq_target[...] = gp.Sum(t, m_out[t] * dt) / 1000.0 + short >= D_req * n_t * dt / 1000.0
 
-    # Carbon-intensity cap on grid imports per tonne of methanol.
+    # Carbon-intensity cap on grid imports per tonne of methanol delivered.
     if par.CI_max is not None:
         eq_ci = gp.Equation(m, "eq_ci")
-        eq_ci[...] = gp.Sum(t, eps[t] * P_imp[t] * dt) <= par.CI_max * gp.Sum(t, m_M[t] * dt) / 1000.0
+        eq_ci[...] = gp.Sum(t, eps[t] * P_imp[t] * dt) <= par.CI_max * gp.Sum(t, m_out[t] * dt) / 1000.0
+
+    # Green-power matching within windows of match_window_h hours.
+    if par.match_window_h and (par.phi_import is not None or par.phi_spill is not None):
+        n_w = int(np.ceil(n_t / par.match_window_h))
+        w = gp.Set(m, "w", records=[f"w{j:04d}" for j in range(n_w)], description="Matching windows")
+        tw = gp.Set(
+            m, "tw", domain=[t, w],
+            records=[(ts, f"w{i // par.match_window_h:04d}") for i, ts in enumerate(data.time_steps)],
+        )
+        if par.phi_import is not None:
+            eq_match_imp = gp.Equation(m, "eq_match_imp", domain=w)
+            eq_match_imp[w] = gp.Sum(t.where[tw[t, w]], P_imp[t]) <= par.phi_import * gp.Sum(t.where[tw[t, w]], load)
+        if par.phi_spill is not None:
+            eq_match_spill = gp.Equation(m, "eq_match_spill", domain=w)
+            eq_match_spill[w] = gp.Sum(t.where[tw[t, w]], P_exp[t] + P_curt[t]) <= par.phi_spill * gp.Sum(
+                t.where[tw[t, w]], cf[t] * C_wind + cf_pv[t] * C_pv
+            )
 
     # Terminal storage conditions.
     if par.terminal_storage:
@@ -429,13 +667,14 @@ def build_model(
         (
             par.c_water_H2 * m_H2[t]
             + par.c_tiebreak_PEM * P_PEM[t]
-            + (par.c_CO2_feed * par.gamma_CO2 - par.p_MeOH) / 1000.0 * m_M[t]
+            + par.c_CO2_feed * par.gamma_CO2 / 1000.0 * m_M[t]
+            - par.p_MeOH / 1000.0 * m_out[t]
             - par.p_H2_sale * h_sell[t]
         )
         * dt,
     )
     cost_start = par.c_cold_start_PEM * C_PEM * gp.Sum(t, y_P[t]) + cost_start_M
-    total_cost = cost_grid + cost_var + cost_start + par.c_short_MeOH * short
+    total_cost = cost_grid + cost_var + cost_start + cost_down + par.c_short_MeOH * short
 
     model = gp.Model(
         m,
@@ -482,15 +721,22 @@ def build_model(
     return m, model, relaxed, symbols
 
 
-def solve(model, solver: str = "cplex", gap: float = 0.005, time_limit: float = 600.0, threads: int = 0, output=None):
+def solve(
+    model,
+    solver: str = "cplex",
+    gap: float = 0.005,
+    time_limit: float = 600.0,
+    threads: int = 0,
+    output=None,
+    abs_gap: Optional[float] = None,
+):
     """Solve and return (wall-clock time [s], GAMSPy solve summary)."""
 
+    opts = {"relative_optimality_gap": gap, "time_limit": time_limit, "threads": threads}
+    if abs_gap is not None:
+        opts["absolute_optimality_gap"] = abs_gap
     t0 = time.perf_counter()
-    summary = model.solve(
-        solver=solver,
-        options=gp.Options(relative_optimality_gap=gap, time_limit=time_limit, threads=threads),
-        output=output,
-    )
+    summary = model.solve(solver=solver, options=gp.Options(**opts), output=output)
     return time.perf_counter() - t0, summary
 
 
@@ -506,7 +752,10 @@ def hourly_results(data: SchedulingData, design: PlantDesign, par: OperatingPara
     df["P_wind"] = df["cf"] * design.C_wind_MW
     df["P_PV"] = df["cf_pv"] * design.C_PV_MW
     df["P_sb"] = par.f_sb_PEM * design.C_PEM_MW * df["s_P"]
-    df["P_MeOH"] = par.SP_MeOH / 1000.0 * df["m_M"]
+    df["P_MeOH"] = df["P_S"] if "P_S" in df else par.SP_MeOH / 1000.0 * df["m_M"]
+    if "m_D" in df:
+        df["Q_syn"] = par.q_syn / 1000.0 * df["m_M"]
+        df["Q_rls"] = par.q_reb / 1000.0 * (df["m_D"] - df["z_F"])
     return df
 
 
@@ -516,10 +765,11 @@ def kpis(df: pd.DataFrame, design: PlantDesign, par: OperatingParams) -> dict:
     dt = par.dt_h
     hours = len(df) * dt
     meoh_t = df["m_M"].sum() * dt / 1000.0
+    out_t = df["m_D"].sum() * dt / 1000.0 if "m_D" in df else meoh_t
     emis_t = (df["eps"] * df["P_imp"]).sum() * dt
-    return {
+    res = {
         "MeOH_t": meoh_t,
-        "MeOH_vs_requirement": meoh_t / (design.demand_kgph * hours / 1000.0),
+        "MeOH_vs_requirement": out_t / (design.demand_kgph * hours / 1000.0),
         "MeOH_load_factor": meoh_t / (design.m_MeOH_nom_kgph * hours / 1000.0),
         "H2_prod_t": df["m_H2"].sum() * dt / 1000.0,
         "H2_sold_t": df["h_sell"].sum() * dt / 1000.0,
@@ -529,7 +779,7 @@ def kpis(df: pd.DataFrame, design: PlantDesign, par: OperatingParams) -> dict:
         "wind_MWh": df["P_wind"].sum() * dt,
         "pv_MWh": df["P_PV"].sum() * dt,
         "emissions_tCO2": emis_t,
-        "CI_tCO2_per_tMeOH": emis_t / meoh_t if meoh_t > 0 else float("nan"),
+        "CI_tCO2_per_tMeOH": emis_t / out_t if out_t > 0 else float("nan"),
         "PEM_on_h": df["u_P"].sum() * dt,
         "PEM_standby_h": df["s_P"].sum() * dt,
         "PEM_cold_starts": df["y_P"].sum(),
@@ -537,3 +787,21 @@ def kpis(df: pd.DataFrame, design: PlantDesign, par: OperatingParams) -> dict:
         "MeOH_starts": df["y_M"].sum() if "y_M" in df else 0.0,
         "grid_cost_USD": (df["price"] * (df["P_imp"] - df["P_exp"])).sum() * dt,
     }
+    if "m_D" in df:
+        dist_MWh = (df["W_F"] + df["P_eb"]).sum() * dt
+        rls_MWh = df["Q_rls"].sum() * dt
+        res.update({
+            "MeOH_delivered_t": out_t,
+            "crude_swing_t": (df["I_c"].max() - df["I_c"].min()) / 1000.0,
+            "FVC_on_h": df["d_F"].sum() * dt,
+            "FVC_MWh": df["W_F"].sum() * dt,
+            "eboiler_MWh": df["P_eb"].sum() * dt,
+            "dist_kWh_per_kg": 1000.0 * dist_MWh / (1000.0 * out_t) if out_t > 0 else float("nan"),
+            "syn_heat_MWh": df["Q_syn"].sum() * dt,
+            "FVC_heat_to_TES_MWh": df["Q_str"].sum() * dt,
+            "TES_release_MWh": rls_MWh,
+            "heat_dumped_MWh": df["Q_dump"].sum() * dt,
+            "TES_full_cycles": rls_MWh / design.E_TES_MWh if design.E_TES_MWh > 0 else 0.0,
+            "dist_power_cost_USD": (df["price"] * (df["W_F"] + df["P_eb"])).sum() * dt,
+        })
+    return res
