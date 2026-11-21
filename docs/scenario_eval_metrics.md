@@ -1,6 +1,6 @@
 # Model 1 评估指标：哪些重点关注、哪些守住、哪些维持
 
-依据：离网 PtM 设计 + 调度 MILP 的下游检验。对象：E5。2026-11-21。
+依据：离网 PtM 设计 + 调度 MILP 的下游检验。对象：E5。2026-11-21。实验结果和数据见 [`scenario_eval_results.md`](scenario_eval_results.md)。
 
 ## 一句话
 

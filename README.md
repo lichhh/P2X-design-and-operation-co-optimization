@@ -121,7 +121,7 @@ The model is used to judge a weather-scenario generator by the decisions it lead
 | `perturbation_study.py` | Single-statistic perturbations of real years: which statistics move the design |
 | `scale_swap_study.py` | Daily-scale versus hourly-scale contributions, for design and fixed-design dispatch |
 
-Conclusions for the generator's evaluation metrics: [`docs/scenario_eval_metrics.md`](docs/scenario_eval_metrics.md) (in Chinese). Generated scenarios are read with `prepare --data <folder>`; `evaluate_synthetic_years.py` (`REAL_CSV`) and `scale_swap_study.py` (`DATA`) also have a local path at the top of the file. Results go to `results/scenario_eval/`, which is not tracked.
+Conclusions for the generator's evaluation metrics: [`docs/scenario_eval_metrics.md`](docs/scenario_eval_metrics.md); full results: [`docs/scenario_eval_results.md`](docs/scenario_eval_results.md) (both in Chinese). Generated scenarios are read with `prepare --data <folder>`; `evaluate_synthetic_years.py` (`REAL_CSV`) and `scale_swap_study.py` (`DATA`) also have a local path at the top of the file. Results go to `results/scenario_eval/`, which is not tracked.
 
 ## Status and limitations
 
