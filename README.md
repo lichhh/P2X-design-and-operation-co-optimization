@@ -106,6 +106,23 @@ Reference solve times (CPLEX, default threads, 0.5 % relative gap):
 - `validate_fvc_part1.py` re-solves scenario b of Qi et al. (2025) (Gansu time-of-use prices, FVC off in the 8 peak hours) with the explicit downstream block. It gives a 679.6 kW compressor (paper: 679 kW) and an MVR break-even price of 115.2 USD/MWh (paper: 115.3).
 - `run_fvc_examples.py [hours]` solves the 2023 Skive year with seven cases: the lumped reference; crude tank + FVC + thermal store; without synthesis-heat recovery; electric boiler instead of FVC; FVC without thermal store; without crude tank; and annual green-power matching. The differences between cases give a first estimate of what each unit is worth.
 
+## Off-grid design and evaluation of generated weather scenarios
+
+`offgrid_design_gamspy.py` optimizes the capacities (wind, PV, PEM modules, battery, H₂ tank) and the hourly operation of an off-grid wind + PV plant together, under perfect foresight. With fixed capacities, the same model operates a given design on another weather series.
+
+The model is used to judge a weather-scenario generator by the decisions it leads to. A design is made on a generated series and then operated on the observed 2024–2025 weather. Its regret is the extra cost over the design made on the observed series. Generated scenarios are compared with real-weather analogs built under the same conditioning (24-day mean wind).
+
+| Script | Purpose |
+|---|---|
+| `evaluate_scenarios.py` | Regret of single series |
+| `evaluate_ensemble.py` | 50 generated scenarios versus 2-year historical blocks, with consensus designs |
+| `evaluate_analogs.py` | Independent real-weather analogs from 2005–2023 (noise floor) |
+| `evaluate_synthetic_years.py` | Synthetic years versus knob-matched analogs and single historical years |
+| `perturbation_study.py` | Single-statistic perturbations of real years: which statistics move the design |
+| `scale_swap_study.py` | Daily-scale versus hourly-scale contributions, for design and fixed-design dispatch |
+
+Conclusions for the generator's evaluation metrics: [`docs/scenario_eval_metrics.md`](docs/scenario_eval_metrics.md) (in Chinese). Generated scenarios are read with `prepare --data <folder>`; `evaluate_synthetic_years.py` (`REAL_CSV`) and `scale_swap_study.py` (`DATA`) also have a local path at the top of the file. Results go to `results/scenario_eval/`, which is not tracked.
+
 ## Status and limitations
 
 - **Single-source parameters.** The methanol synthesis electricity use and H₂/CO₂ consumption come from one source (via MasCOR). The on/off variant's start-up parameters are placeholders.
